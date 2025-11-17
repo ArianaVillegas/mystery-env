@@ -183,8 +183,15 @@ credentials.json
 .gcloud/
 .config/gcloud/
 
-# Streamlit
-.streamlit/
+# Streamlit secrets (keep config files)
+.streamlit/secrets.toml
+.streamlit/credentials.toml
+
+# Local Database
+mystery_env.db
+*.db
+*.sqlite
+*.sqlite3
 
 # Logs
 *.log

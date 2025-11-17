@@ -1,11 +1,24 @@
 import time
+import streamlit as st
 from google.cloud import firestore
-from dotenv import load_dotenv
+from google.oauth2 import service_account
+import json
 
-# Load environment variables from .env file
-load_dotenv()
-
-db = firestore.Client()
+# Load credentials from Streamlit secrets
+if "gcp_service_account" in st.secrets:
+    # Use Streamlit secrets
+    credentials_info = dict(st.secrets["gcp_service_account"])
+    credentials = service_account.Credentials.from_service_account_info(credentials_info)
+    db = firestore.Client(credentials=credentials, project=credentials_info.get("project_id"))
+else:
+    # Fallback to environment variable (for local development)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        db = firestore.Client()
+    except:
+        st.error("🔐 Firestore credentials not configured. Please set up secrets.toml")
+        st.stop()
 
 def get_player(user):
     doc = db.collection("players").document(user).get()

@@ -1,12 +1,26 @@
 import time
 import streamlit as st
-from firestore import (
-    get_player,
-    create_player,
-    update_after_action,
-    force_timeout,
-    get_leaderboard
-)
+
+# Switch between local and cloud database
+USE_LOCAL_DATABASE = True  # Set to False to use Firestore
+
+if USE_LOCAL_DATABASE:
+    from local_database import (
+        get_player,
+        create_player, 
+        update_after_action,
+        force_timeout,
+        get_leaderboard
+    )
+else:
+    from firestore import (
+        get_player,
+        create_player,
+        update_after_action,
+        force_timeout,
+        get_leaderboard
+    )
+
 from simulation import CarEnvironment
 
 DURATION_SECONDS = 10 * 60
@@ -48,29 +62,35 @@ with col1:
 with col2:
     st.metric("🎯 Attempts Left", player['attempts_left'])
 with col3:
-    st.metric("🏆 Total Score", player['total_reward'])
+    st.metric("🏆 Best Score", player['best_reward'])
 
 # ------------- TABS -------------
 tab1, tab2 = st.tabs(["🎮 Environment", "🏆 Leaderboard"])
 
+# Map states to generic labels (global for the session)
+state_map = {"cool": "A", "warm": "B", "overheated": "C"}
+
 with tab1:
     # Show time expired warning if needed
     if time_expired:
-        st.error("⏰ Se agotó el tiempo (5 minutos). ¡Revisa tu puntuación final en el Leaderboard!")
+        st.error("⏰ Se agotó el tiempo (10 minutos). ¡Revisa tu puntuación final en el Leaderboard!")
         st.divider()
     
-    # Map states to generic labels
-    state_map = {"cool": "A", "warm": "B", "overheated": "C"}
-    current_state_label = state_map[env.current_state]
+    # Only show progress, not internal state
+    st.subheader("Environment Status")
     
-    st.subheader(f"Current State: {current_state_label}")
-    
-    # Show minimal information - no details about what anything means
+    # Show minimal information - no internal state revealed
     col1, col2 = st.columns(2)
     with col1:
         st.info(f"Progress: {env.distance_traveled}/15")
     with col2:
-        st.info(f"State: {current_state_label}")
+        if env.done:
+            if env.distance_traveled >= env.target_distance:
+                st.success("✅ Episode Complete")
+            else:
+                st.error("❌ Episode Terminated")
+        else:
+            st.info("🎮 Ready for next episode")
     
     # Minimal instructions - let them discover through trial and error
     with st.expander("📋 Instructions"):
@@ -80,7 +100,7 @@ with tab1:
         - There are 3 possible states: A, B, C
         - There are 2 possible actions: 1, 2  
         - You'll receive rewards based on your actions
-        - Try to maximize your total reward
+        - Try to maximize your best single episode reward
         - Episodes end when certain conditions are met
         
         **Your task:** Learn the optimal policy through trial and error!
@@ -119,50 +139,106 @@ with tab1:
             st.session_state.env = CarEnvironment()
             env = st.session_state.env
             
-            # Run complete episode
+            # Show simulation progress
+            st.subheader("🎬 Running Episode Simulation...")
+            
+            # Create containers for dynamic updates
+            progress_container = st.container()
+            step_container = st.container()
+            result_container = st.container()
+            
+            with progress_container:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+            
+            # Run complete episode with delays
             episode_steps = []
             total_reward = 0
             step_count = 0
+            max_steps = 20
             
-            while not env.done and step_count < 20:  # Safety limit
+            while not env.done and step_count < max_steps:
                 current_state = env.current_state
                 current_state_label = state_map[current_state]
                 action = st.session_state.strategy[current_state]
                 action_display = "1" if action == "slow" else "2"
                 
+                # Update progress
+                progress = (step_count + 1) / max_steps
+                progress_bar.progress(progress)
+                status_text.text(f"Step {step_count + 1}: Taking Action {action_display}...")
+                
+                # Execute step
                 obs, reward, done = env.step(action)
                 total_reward += reward
                 step_count += 1
                 
                 episode_steps.append({
                     "step": step_count,
-                    "state": current_state_label,
                     "action": action_display,
                     "reward": reward,
                     "progress": obs["distance"]
                 })
                 
+                # Show current step result
+                with step_container:
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Step", step_count)
+                    with col2:
+                        st.metric("Action", action_display)
+                    with col3:
+                        st.metric("Step Reward", reward)
+                
+                # Add 2-second delay
+                if not done:
+                    time.sleep(2)
+                
                 if done:
                     break
             
-            # Update database with total episode reward
+            # Complete progress bar
+            progress_bar.progress(1.0)
+            status_text.text("Episode Complete!")
+            
+            # Check if this is a new best before updating
+            current_best = player['best_reward']
+            is_new_best = total_reward > current_best
+            
+            # Update database with episode reward
             update_after_action(user, f"Episode-{step_count}steps", total_reward)
             
-            # Display episode results
-            st.success(f"📊 Episode Complete! Total Steps: {step_count} | Total Reward: {total_reward}")
+            # Display final results
+            with result_container:
+                st.divider()
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Steps", step_count)
+                with col2:
+                    if is_new_best:
+                        st.metric("Episode Reward", total_reward, delta=f"NEW BEST! (+{total_reward - current_best})")
+                    else:
+                        st.metric("Episode Reward", total_reward)
+                with col3:
+                    st.metric("Final Progress", f"{env.distance_traveled}/15")
+                
+                # Show special celebration for achievements
+                if is_new_best:
+                    st.balloons()
+                    st.success("🎉 NEW BEST SCORE! Outstanding improvement!")
+                elif env.distance_traveled >= env.target_distance:
+                    st.success("🎯 Goal Reached! Great policy!")
+                else:
+                    st.info("📈 Keep experimenting to improve your score!")
+                
+                # Show episode trace (without internal states)
+                with st.expander("📈 Episode Trace"):
+                    import pandas as pd
+                    df = pd.DataFrame(episode_steps)
+                    st.dataframe(df, use_container_width=True)
             
-            # Show episode trace
-            with st.expander("📈 Episode Trace"):
-                import pandas as pd
-                df = pd.DataFrame(episode_steps)
-                st.dataframe(df, width='stretch')
-            
-            if env.distance_traveled >= env.target_distance:
-                st.balloons()
-                st.success("🎉 Goal Reached! Excellent policy!")
-            else:
-                st.error("💥 Episode terminated early!")
-            
+            # Auto-refresh after showing results for 3 seconds
+            time.sleep(3)
             st.rerun()
     
     elif env.done and not time_expired:
@@ -186,7 +262,7 @@ with tab2:
     
     # Show final results message if time expired
     if time_expired:
-        st.success(f"🏁 ¡Juego terminado! Tu puntuación final: **{player['total_reward']}** puntos")
+        st.success(f"🏁 ¡Juego terminado! Tu mejor puntuación: **{player['best_reward']}** puntos")
         st.divider()
     
     # Refresh button
@@ -208,7 +284,7 @@ with tab2:
             leaderboard_data.append({
                 "Rank": f"#{i}",
                 "Username": f"👤 {row['username']}" if is_current_user else row['username'],
-                "Score": row['total_reward'],
+                "Best Score": row['best_reward'],
                 "Attempts Left": row['attempts_left']
             })
         
