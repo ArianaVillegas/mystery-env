@@ -241,12 +241,7 @@ with tab1:
             time.sleep(3)
             st.rerun()
     
-    elif env.done and not time_expired:
-        if env.distance_traveled >= env.target_distance:
-            st.success("🎉 Episode Complete! Click 'Reset Environment' to continue learning.")
-        else:
-            st.error("💥 Episode Terminated! Click 'Reset Environment' to try again.")
-        
+    elif env.done and not time_expired:        
         if st.button("🔄 Reset Environment"):
             st.session_state.env = CarEnvironment()
             st.rerun()
